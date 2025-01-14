@@ -292,8 +292,8 @@ namespace MissionPlanner.Log
         void ComPort_Progress(int progress, string status)
         {
             receivedbytes = (uint)progress;
-
-            UpdateProgress(0, totalBytes, tallyBytes + receivedbytes);
+            tallyBytes += receivedbytes;
+            UpdateProgress(0, totalBytes, tallyBytes);
         }
 
         void CreateKML(string logfile)
@@ -346,8 +346,8 @@ namespace MissionPlanner.Log
 
                     await GetLog(entry.id, fileName).ConfigureAwait(false);
 
-                    tallyBytes += receivedbytes;
                     receivedbytes = 0;
+                    tallyBytes = 0;
                     UpdateProgress(0, totalBytes, tallyBytes);
                 }
 
@@ -391,9 +391,9 @@ namespace MissionPlanner.Log
         {
             RunOnUIThread(() =>
             {
-                progressBar1.Minimum = (int)min;
-                progressBar1.Maximum = (int)max;
-                progressBar1.Value = (int)current;
+                progressBar1.Minimum = 0;
+                progressBar1.Maximum = 100;
+                progressBar1.Value = (int)((current / (double)max) * 100);
                 progressBar1.Visible = (current < max);
 
                 if (current == 0)

@@ -5962,6 +5962,7 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
                 uint totallength = 0;
                 uint ofs = 0;
                 uint bps = 0;
+                uint packet_data_len = 90;
                 DateTime bpstimer = DateTime.Now;
 
                 ConcurrentQueue<MAVLinkMessage> queue = new ConcurrentQueue<MAVLinkMessage>();
@@ -6034,7 +6035,7 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
                             bps += data.count;
 
                             // record what we have received
-                            set[(data.ofs / 90).ToString()] = 1;
+                            set[(data.ofs / packet_data_len).ToString()] = 1;
 
                             if (ms.Position != data.ofs)
                                 ms.Seek((long) data.ofs, SeekOrigin.Begin);
@@ -6047,7 +6048,7 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
                             {
                                 if (Progress != null)
                                 {
-                                    Progress((int) req.ofs, "");
+                                    Progress((int)bps, "");
                                 }
 
                                 //Console.WriteLine("log dl bps: " + bps.ToString());
@@ -6056,7 +6057,7 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
                             }
 
                             // if data is less than max packet size or 0 > exit
-                            if (data.count < 90 || data.count == 0)
+                            if (data.count < packet_data_len || data.count == 0)
                             {
                                 totallength = data.ofs + data.count;
                                 log.Info("start fillin len " + totallength + " count " + set.Count + " datalen " +
@@ -6068,13 +6069,17 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
                 }
 
                 log.Info("set count " + set.Count);
-                log.Info("count total " + ((totallength) / 90 + 1));
+                log.Info("count total " + ((totallength) / packet_data_len + 1));
                 log.Info("totallength " + totallength);
                 log.Info("current length " + ms.Length);
 
+                // Initialize some values used in asyncronous retries
+                req.ofs = 0;
+                uint expected_num_packets = 0;
+                uint received_packet_count = 0;
                 while (true && ((BaseStream != null && BaseStream.IsOpen) || logreadmode))
                 {
-                    if (totallength == ms.Length && set.Count >= ((totallength) / 90 + 1))
+                    if (totallength == ms.Length && set.Count >= ((totallength) / packet_data_len + 1))
                     {
                         giveComport = false;
                         OnPacketReceived -= handler;
@@ -6083,23 +6088,26 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
 
                     if (!(start.AddMilliseconds(500) > DateTime.Now))
                     {
-                        for (int a = 0; a < ((totallength) / 90 + 1); a++)
+                        int new_start_ofs = (int)(req.ofs / packet_data_len);
+                        for (int a = new_start_ofs; a < ((totallength) / packet_data_len + 1); a++)
                         {
                             if (!set.ContainsKey(a.ToString()))
                             {
                                 // request large chunk if they are back to back
-                                uint bytereq = 90;
+                                uint bytereq = packet_data_len;
                                 int b = a + 1;
                                 while (!set.ContainsKey(b.ToString()))
                                 {
-                                    bytereq += 90;
+                                    bytereq += packet_data_len;
                                     b++;
                                 }
 
                                 req.ofs = (uint) (a * 90);
                                 req.count = bytereq;
+                                received_packet_count = 0;
+                                expected_num_packets = bytereq / packet_data_len;
                                 log.Info("req missing " + req.ofs + " bytes " + req.count + " got " + set.Count + "/" +
-                                         ((totallength) / 90 + 1));
+                                         ((totallength) / packet_data_len + 1));
                                 generatePacket((byte) MAVLINK_MSG_ID.LOG_REQUEST_DATA, req);
                                 start = DateTime.Now;
                                 break;
@@ -6127,9 +6135,10 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
                             start = DateTime.Now;
 
                             bps += data.count;
+                            received_packet_count += 1;
 
                             // record what we have received
-                            set[(data.ofs / 90).ToString()] = 1;
+                            set[(data.ofs / packet_data_len).ToString()] = 1;
 
                             ms.Seek((long) data.ofs, SeekOrigin.Begin);
                             ms.Write(data.data, 0, data.count);
@@ -6141,7 +6150,7 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
                             {
                                 if (Progress != null)
                                 {
-                                    Progress((int) req.ofs, "");
+                                    Progress((int)bps, "");
                                 }
 
                                 //Console.WriteLine("log dl bps: " + bps.ToString());
@@ -6149,14 +6158,17 @@ Mission Planner waits for 2 valid heartbeat packets before connecting
                                 bps = 0;
                             }
 
-                            // check if we have next set and invalidate to request next packets
-                            if (set.ContainsKey(((data.ofs / 90) + 1).ToString()))
+                            // Updated short cut based on packets received vs packets expected
+                            // When the requested number of LOG_DATA packets have arrived, 
+                            // check the next request.
+                            if (received_packet_count >= expected_num_packets)
                             {
                                 start = DateTime.MinValue;
+                                continue;
                             }
 
                             // if data is less than max packet size or 0 > exit
-                            if (data.count < 90 || data.count == 0)
+                            if (data.count < packet_data_len || data.count == 0)
                             {
                                 continue;
                             }
